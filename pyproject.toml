@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "prompt-injection-guard"
+version = "0.1.0"
+description = "Two-layer prompt injection guard: embedding similarity (Chroma) first, a retrieval-augmented Gemini classifier only when unsure."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "datasets>=5.2",
+    "numpy",
+    "langchain-core>=1.7",
+    "langchain-chroma>=1.1",
+    "langchain-huggingface>=1.2",
+    "langchain-google-genai>=4.4",
+    "sentence-transformers>=6.2",
+    "pydantic>=2",
+    "python-dotenv",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
