@@ -27,4 +27,4 @@ BLOCK_THRESHOLD = 0.98  # on the tuning prompts: 0 of 69 safe prompts scored thi
 INDEX_ALL_TRAIN_ATTACKS = False
 
 # --- Layer 2: Gemini classifier -----------------------------------------
-GEMINI_MODEL = "gemini-2.5-flash"  # fast, cheap, has a free tier
+GEMINI_MODEL = "gemini-3.8-flash"  # fast, cheap, has a free tier
