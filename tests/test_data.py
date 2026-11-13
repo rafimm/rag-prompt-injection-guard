@@ -11,6 +11,7 @@ index_part, tuning_part = split_train(train)
 
 
 def count_injections(rows):
+    """Count the injections in a list of rows."""
     # Labels are 0 or 1, so the sum is the number of injections.
     return sum(r["label"] for r in rows)
 

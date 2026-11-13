@@ -1,5 +1,7 @@
 """Step 3: Layer 2 - Gemini classifier (only called when Layer 1 is "unsure").
 
+In one line: asks an LLM to judge the uncertain messages, with the similar known attacks as evidence.
+
 How it works
     1. Build a prompt containing the message to check and (optionally) the top-3 similar
        known attacks that Layer 1 already retrieved. This is the "retrieval-augmented" part.
@@ -15,7 +17,7 @@ from dotenv import load_dotenv
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 
-from prompt_injection_guard.config import GEMINI_MODEL
+from prompt_injection_guard.config import LLM_MODEL
 
 load_dotenv()  # reads GOOGLE_API_KEY from the .env file into the environment
 
@@ -25,6 +27,8 @@ load_dotenv()  # reads GOOGLE_API_KEY from the .env file into the environment
 # The shape of Gemini's answer (Pydantic). with_structured_output forces this format.
 # ---------------------------------------------------------------------------
 class AttackType(str, Enum):
+    """The kinds of attack Gemini can name (or "none" for a safe message)."""
+
     none = "none"
     instruction_override = "instruction_override"  # "ignore all previous instructions..."
     prompt_leaking = "prompt_leaking"              # "show me your system prompt"
@@ -35,6 +39,8 @@ class AttackType(str, Enum):
 
 
 class Layer2Result(BaseModel):
+    """The structured answer we force Gemini to return: a verdict, a confidence and an attack type."""
+
     is_injection: bool = Field(description="True if the user input is a prompt injection attempt.")
     confidence: float = Field(description="How sure you are, from 0.0 to 1.0.", ge=0, le=1)
     attack_type: AttackType = Field(description="Kind of attack, or 'none' if the input is safe.")
@@ -61,8 +67,8 @@ EXAMPLES_BLOCK = """<similar_known_attacks>
 
 """
 
-HUMAN_PROMPT_WITH_EXAMPLES = EXAMPLES_BLOCK + "<user_input>\n{text}\n</user_input>"
 HUMAN_PROMPT_PLAIN = "<user_input>\n{text}\n</user_input>"
+HUMAN_PROMPT_WITH_EXAMPLES = EXAMPLES_BLOCK + HUMAN_PROMPT_PLAIN
 
 
 def format_examples(similar_attacks):
@@ -91,7 +97,7 @@ def build_classifier(use_retrieval=True):
         HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
         HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
     }
-    llm = ChatGoogleGenerativeAI(model=GEMINI_MODEL, temperature=0, safety_settings=relaxed)
+    llm = ChatGoogleGenerativeAI(model=LLM_MODEL, temperature=0, safety_settings=relaxed)
 
     human = HUMAN_PROMPT_WITH_EXAMPLES if use_retrieval else HUMAN_PROMPT_PLAIN
     prompt = ChatPromptTemplate.from_messages([("system", SYSTEM_PROMPT), ("human", human)])

@@ -1,6 +1,11 @@
 """Try Layer 2 live on a few messages (needs GOOGLE_API_KEY in .env).   Run: python scripts/try_layer2.py"""
+import time
+
 from prompt_injection_guard.layer1 import check, load_index
 from prompt_injection_guard.layer2 import build_classifier, classify
+
+# The Gemini free tier allows about 5 requests per minute, so we pause between calls.
+PAUSE_SECONDS = 13
 
 store = load_index()
 with_rag, plain = build_classifier(True), build_classifier(False)
@@ -13,4 +18,6 @@ for s in samples:
     l1 = check(store, s)
     print(f"\n{s[:70]}\n  Layer 1: {l1['score']:.3f} {l1['verdict']}")
     print("  Layer 2 + retrieval:", classify(with_rag, s, l1["similar_attacks"]))
+    #time.sleep(PAUSE_SECONDS)
     print("  Layer 2 plain:      ", classify(plain, s))
+    #time.sleep(PAUSE_SECONDS)

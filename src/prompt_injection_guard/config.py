@@ -1,5 +1,7 @@
 """All settings in one place, so they are easy to find and change.
 
+In one line: thresholds, model names, dataset name, seed and paths used by the other modules.
+
 If EMBED_MODEL or the stored attacks change, re-tune PASS_THRESHOLD and BLOCK_THRESHOLD.
 """
 from pathlib import Path
@@ -26,5 +28,5 @@ BLOCK_THRESHOLD = 0.98  # on the tuning prompts: 0 of 69 safe prompts scored thi
 # True:  store all 203 train attacks (do this AFTER tuning, see docs/ARCHITECTURE.md).
 INDEX_ALL_TRAIN_ATTACKS = False
 
-# --- Layer 2: Gemini classifier -----------------------------------------
-GEMINI_MODEL = "gemini-3.8-flash"  # fast, cheap, has a free tier
+# --- LLM (Layer 2 classifier and the main chain) ---------------------------
+LLM_MODEL = "gemma-4-26b-a4b-it"  # Gemma 4 via the Gemini API: free tier, supports structured output

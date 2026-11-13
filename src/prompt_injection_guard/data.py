@@ -1,5 +1,7 @@
 """Step 1: Load the deepset/prompt-injections dataset and split it.
 
+In one line: gets the labeled prompts and divides them into index, tuning and test pieces.
+
 Each row is one short prompt with a label:  0 = safe, 1 = injection.
 
     train (546) ──┬── index part  (80%) -> its injections become the "known attacks" in Chroma
@@ -64,23 +66,3 @@ def summarize(name, rows):
     # Labels are 0 or 1, so adding them up counts the injections.
     n_inj = sum(r["label"] for r in rows)
     print(f"{name:<12} {len(rows):>4} prompts  ({n_inj} injections, {len(rows) - n_inj} safe)")
-
-
-# This block runs only when you execute `python data.py` directly,
-# not when another file does `from data import load_data`.
-if __name__ == "__main__":
-    train, test = load_data()
-    index_part, tuning_part = split_train(train)
-    index_part, tuning_part = split_train(train)
-
-    # Check the sizes and the safe/injection balance of every split.
-    summarize("train", train)
-    summarize("  index", index_part)
-    summarize("  tuning", tuning_part)
-    summarize("test", test)
-
-    # Show a few real examples: the first 3 rows (safe) and the first 3 injections.
-    print("\nExamples:")
-    first_injections = [r for r in train if r["label"] == 1][:3]
-    for r in train[:3] + first_injections:
-        print(f"  [{r['label']}] {r['text'][:90]}")  # [:90] trims long prompts for display

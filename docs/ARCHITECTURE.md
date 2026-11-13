@@ -12,7 +12,7 @@ flowchart LR
     U[User input] --> L1["Layer 1<br/>Similarity to known attacks<br/>(Chroma + embeddings, no LLM)"]
     L1 -->|score ≥ BLOCK| X[Unsafe]
     L1 -->|score ≤ PASS| S[Safe]
-    L1 -->|in between: unsure<br/>+ top-3 similar attacks| L2["Layer 2<br/>Gemini classifier<br/>(retrieval-augmented,<br/>structured output)"]
+    L1 -->|in between: unsure<br/>+ top-3 similar attacks| L2["Layer 2<br/>LLM classifier (Gemma 4)<br/>(retrieval-augmented,<br/>structured output)"]
     L2 -->|is_injection = true| X
     L2 -->|is_injection = false| S
     S --> M[main_chain]
@@ -27,6 +27,35 @@ guarded_chain = guard | RunnableBranch(
     refusal,
 )
 ```
+
+### 2.1 How a prompt gets checked (walkthrough)
+
+The guard has two layers. The cheap one runs first; the expensive one runs only when the
+cheap one is unsure. The flow lives in `check_input()` in `guard.py`.
+
+1. **Layer 1 embeds the prompt.** The local model `multilingual-e5-small` turns the text into
+   384 numbers (a vector). Stored attacks were embedded the same way when the index was built.
+2. **Chroma returns the 3 closest known attacks**, each with a score. The score is the cosine
+   similarity between the prompt's vector and the attack's vector: `score = 1 - cosine distance`.
+   1.0 means identical meaning; lower means less similar. Each score is independent of the others.
+3. **Only the closest attack sets the verdict.** `best_score = similar[0][1]` is compared with
+   the thresholds: `>= BLOCK` is injection, `<= PASS` is safe, anything between is unsure.
+   The other two attacks are not used for the verdict; they are kept as evidence for Layer 2.
+4. **Unsure prompts go to Layer 2.** The LLM sees the prompt (inside `<user_input>`) and the
+   top-3 attacks (inside `<similar_known_attacks>`), both marked as data it must not obey, and
+   answers with `is_injection`, `confidence` and `attack_type`. If the call fails, the prompt is
+   blocked (fail closed).
+5. **The verdict decides what happens next.** Safe goes to `main_chain`; unsafe gets the fixed
+   refusal message without any LLM call.
+
+Things that are easy to miss:
+
+- **Chroma stores only attacks** (the injections of the index part), no safe prompts. It has no
+  "no match" answer: for a safe prompt it still returns its 3 nearest attacks, they just score
+  low. A low score means "nothing like any known attack", not "matched a safe example".
+- **A safe prompt can still score high** if it resembles an attack (for example, it is the
+  harmless first half of a stored attack). That is why a band of unsure scores exists and why
+  Layer 2 is told that similarity is only a hint.
 
 ## 3. Components
 
@@ -68,7 +97,7 @@ safe and injection prompts, and pick the numbers by hand. Never tune on the test
 ### 3.3 Layer 2: Retrieval-augmented LLM classifier (`src/prompt_injection_guard/layer2.py`)
 | Item | Choice |
 |---|---|
-| LLM | Gemini Flash via `langchain-google-genai` (`ChatGoogleGenerativeAI`, temperature 0) |
+| LLM | `gemma-4-26b-a4b-it` (Gemma 4) via the Gemini API and `langchain-google-genai` (`ChatGoogleGenerativeAI`, temperature 0) |
 | Context | The **top 3 most similar known attacks** from Layer 1's search, with their similarity scores |
 | Output | Structured output with `.with_structured_output(...)` |
 
@@ -85,7 +114,7 @@ attacks, and Layer 2 *generates* its verdict using them as evidence:
 </user_input>
 ```
 
-The prompt tells Gemini that the examples are **reference only**. Being similar to a
+The prompt tells the model that the examples are **reference only**. Being similar to a
 known attack is a hint, not proof, because safe prompts can share words with attacks.
 
 Output schema (Pydantic):
@@ -99,26 +128,31 @@ Output schema (Pydantic):
 Safety rules:
 - The input and the retrieved examples are wrapped in tags, and the prompt says to treat
   both as data, never as instructions, so the classifier itself can't be injected.
-- **Fail closed:** if the Gemini call errors, the input is treated as an injection.
-- Gemini's built-in content filters are relaxed for this call only, because the
+- **Fail closed:** if the LLM call errors (network, quota, empty response), the input is treated as an injection.
+- The Gemini API's built-in content filters are relaxed for this call only, because the
   classifier has to *read* attack text in order to classify it.
 
 ### 3.4 Guard and guarded chain (`src/prompt_injection_guard/guard.py`)
-- `guard`: runs Layer 1 and calls Layer 2 only if Layer 1 is unsure. Returns
-  `{"input", "safe", "details"}`.
-- `main_chain`: a simple Gemini assistant (placeholder for any real chain, e.g. a RAG chain).
+- `check_input(text, vectorstore, classifier)`: runs Layer 1 and calls Layer 2 only if Layer 1 is
+  unsure. Returns `{"input", "safe", "details"}`; `details` says which layer decided.
+- `guarded_answer(text, vectorstore, classifier, main_chain)`: the whole flow as plain `if/else`:
+  check, then answer (`main_chain`) or refuse. Returns `(reply, verdict)`. Easiest to read and debug.
+- `build_guard()`, `build_guarded_chain()`: the same flow as LangChain runnables,
+  `guard | RunnableBranch(safe → main_chain, unsafe → refusal)`, built from the same pieces.
+- `main_chain`: a simple LLM assistant (placeholder for any real chain, e.g. a RAG chain).
 - `refusal`: returns a fixed "can't help with that" message.
-- `guarded_chain = guard | RunnableBranch(safe → main_chain, unsafe → refusal)`.
 
-### 3.5 Evaluation (`scripts/evaluate.py`)
+All settings (thresholds, model name, paths, dataset, seed) live in `config.py`.
+
+### 3.5 Evaluation (`scripts/evaluate.py`, planned: step 5, not built yet)
 Runs on the **test** split and reports three modes:
 
 | Mode | How it decides |
 |---|---|
 | Layer 1 only | `score >= L1_THRESHOLD` |
-| Layer 2 only | Gemini on every prompt, **without** retrieved examples (plain classifier) |
-| Layer 2 + retrieval | Gemini on every prompt, **with** the top-3 retrieved attacks |
-| Combined | Layer 1 bands, with retrieval-augmented Gemini only for "unsure" |
+| Layer 2 only | The LLM on every prompt, **without** retrieved examples (plain classifier) |
+| Layer 2 + retrieval | The LLM on every prompt, **with** the top-3 retrieved attacks |
+| Combined | Layer 1 bands, with retrieval-augmented LLM only for "unsure" |
 
 Comparing "Layer 2 only" with "Layer 2 + retrieval" shows how much the retrieved context helps.
 
@@ -126,11 +160,11 @@ Metrics, where an injection counts as the positive class:
 - **Precision** = TP / (TP + FP): of the prompts we blocked, how many were really attacks
 - **Recall** = TP / (TP + FN): of the real attacks, how many we caught
 - **False-positive rate** = FP / (FP + TN): of the safe prompts, how many we wrongly blocked
-- **LLM calls:** how many prompts needed Gemini (shows the cost savings of layering)
+- **LLM calls:** how many prompts needed the LLM (shows the cost savings of layering)
 
-Gemini results are saved to a small cache file, so reruns don't use API quota.
+LLM results are saved to a small cache file, so reruns don't use API quota.
 
-### 3.6 UI (`app/streamlit_app.py`, optional)
+### 3.6 UI (`app/streamlit_app.py`, optional, planned: step 6, not built yet)
 A Streamlit chat page. Each reply shows the guard's verdict: Layer 1 score, nearest
 known attack, and Layer 2 output when it was used.
 
@@ -139,12 +173,12 @@ known attack, and Layer 2 output when it was used.
 | Purpose | Library |
 |---|---|
 | Orchestration | `langchain-core` (Runnables, `RunnableBranch`) |
-| LLM | `langchain-google-genai` (Gemini) |
+| LLM | `langchain-google-genai` (Gemma 4 via the Gemini API) |
 | Embeddings | `langchain-huggingface` + `sentence-transformers` |
 | Vector DB | `langchain-chroma` |
 | Dataset | `datasets` (Hugging Face) |
 | UI | `streamlit` |
-| Config | `python-dotenv` (`GOOGLE_API_KEY` in `.env`) |
+| Config | `python-dotenv` (`GOOGLE_API_KEY` in `.env`); packaging in `pyproject.toml` |
 
 Python 3.12.
 
@@ -158,23 +192,23 @@ Python 3.12.
 | Two thresholds (pass / block) | Lets Layer 1 settle the clear cases cheaply and send only uncertain ones to the LLM. |
 | Thresholds chosen on a train slice | Keeps the test results honest (no leakage). |
 | Fail closed in Layer 2 | For a security control, an error should block, not allow. |
-| Gemini Flash | Fast and cheap, has a free tier, and supports structured output. |
+| Gemma 4 (`gemma-4-26b-a4b-it`) | Free tier and works with structured output (tested on a few messages). The model name is one setting (`LLM_MODEL`) in `config.py`, so it is easy to compare with a Gemini model. |
 | Functions over classes | Keeps the code easy to read and teach. |
 
 ## 6. Deployment (later)
 
 **Hugging Face Spaces** (free CPU tier) running Streamlit. The embedding model runs on
-CPU, and Gemini is an API call. Vercel isn't a good fit, because it can't run Streamlit
+CPU, and the LLM is an API call. Vercel isn't a good fit, because it can't run Streamlit
 or keep a local Chroma index.
 
 ## 7. Known risks and limitations
 
 - **New attack styles:** Layer 1 only recognizes attacks similar to ones it has seen. In an
   early test, many test-split attacks scored low enough that Layer 1 passed them without
-  asking Layer 2. Lowering `PASS_THRESHOLD` sends more prompts to Gemini, which raises
+  asking Layer 2. Lowering `PASS_THRESHOLD` sends more prompts to the LLM, which raises
   recall and cost.
 - **Small test set:** with 116 prompts, each mistake moves the metrics by about 1–2 percentage points.
-- **Free-tier rate limits:** Gemini calls are throttled, so a full evaluation takes several minutes.
+- **Free-tier rate limits:** LLM calls are rate limited (the Gemini free tier was about 5 requests per minute for Gemini models; check your Gemma limit), so a full evaluation can take a while. Results are cached.
 
 ## 8. Planned enhancement: protect a document RAG chain
 
@@ -184,7 +218,7 @@ Q&A chain, so the project shows a RAG app **and** a guard protecting it.
 ```mermaid
 flowchart LR
     U[User input] --> G[guard<br/>Layer 1 + Layer 2]
-    G -->|safe| RAG["rag_chain<br/>retrieve domain docs → Gemini answers with sources"]
+    G -->|safe| RAG["rag_chain<br/>retrieve domain docs → LLM answers with sources"]
     G -->|unsafe| R[refusal]
 ```
 

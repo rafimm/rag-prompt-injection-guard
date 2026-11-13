@@ -1,5 +1,8 @@
 """Step 2: Layer 1 - similarity to known attacks (fast, no LLM call).
 
+In one line: stores known attacks in a vector database and scores a new message by how
+closely it matches the nearest one, then gives a verdict (safe / injection / unsure).
+
 How it works
     1. Embed the known attacks (injections from the index pile) and store them in Chroma.
     2. To check a new message: embed it, ask Chroma for the closest known attacks,
@@ -45,17 +48,22 @@ def get_embeddings():
     )
 
 
-def build_index(known_attacks):
-    """Embed the known attacks and save them in Chroma. Any old index is deleted first."""
-    if CHROMA_DIR.exists():
-        shutil.rmtree(CHROMA_DIR)  # start clean so we never mix old and new attacks
-
-    vectorstore = Chroma(
+def open_store():
+    """Open (or create) the Chroma collection on disk. build_index() and load_index() both use this."""
+    return Chroma(
         collection_name=COLLECTION_NAME,
         embedding_function=get_embeddings(),
         persist_directory=str(CHROMA_DIR),
         collection_metadata={"hnsw:space": "cosine"},  # measure closeness with cosine similarity
     )
+
+
+def build_index(known_attacks):
+    """Embed the known attacks and save them in Chroma. Any old index is deleted first."""
+    if CHROMA_DIR.exists():
+        shutil.rmtree(CHROMA_DIR)  # start clean so we never mix old and new attacks
+
+    vectorstore = open_store()
     # add_texts embeds each attack and stores text + vector together.
     vectorstore.add_texts(known_attacks)
     return vectorstore
@@ -63,12 +71,7 @@ def build_index(known_attacks):
 
 def load_index():
     """Open the index that build_index() saved earlier (no re-embedding needed)."""
-    return Chroma(
-        collection_name=COLLECTION_NAME,
-        embedding_function=get_embeddings(),
-        persist_directory=str(CHROMA_DIR),
-        collection_metadata={"hnsw:space": "cosine"},
-    )
+    return open_store()
 
 
 def find_similar(vectorstore, text, k=TOP_K):
